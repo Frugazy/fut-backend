@@ -1,7 +1,4 @@
-flask
-requests
-gunicorn
-schedule
-pandas
-beautifulsoup4
-lxml
+Flask==2.4.0
+requests==2.31.0
+beautifulsoup4==4.12.2
+gunicorn==23.0.0
