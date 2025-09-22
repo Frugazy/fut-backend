@@ -1,6 +1,4 @@
-Pillow==10.0.1
-requests==2.32.5
 Flask==2.3.3
+requests==2.32.5
 beautifulsoup4==4.12.2
-gunicorn==21.2.0
-# add any other dependencies here
+Pillow==10.1.0
