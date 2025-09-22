@@ -1,4 +1,7 @@
+# Python version
+# Ensure Render uses Python 3.13.x
+# python_version >= 3.13,<3.14
+
 Flask==2.3.3
-requests==2.34.0
-beautifulsoup4==4.13.0
-gunicorn==23.0.0
+requests==2.32.5
+beautifulsoup4==4.12.2
