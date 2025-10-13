@@ -1670,12 +1670,12 @@ function getHtmlOutput() {
             
             contextMenuPlayer = { name: playerName, priceHunter: priceHunter, priceShadow: priceShadow };
             const menu = document.getElementById('contextMenu');
-            menu.innerHTML = `
+            menu.innerHTML = \`
                 <div class="context-menu-item" onclick="showObservedPricePrompt()">💰 Add Observed Price</div>
                 <div class="context-menu-item" onclick="blacklistPlayer('Full')">🚫 Full Blacklist</div>
                 <div class="context-menu-item" onclick="blacklistPlayer('Hunter')">🎯 Hunter Skip</div>
                 <div class="context-menu-item" onclick="blacklistPlayer('Shadow')">👤 Shadow Skip</div>
-            `;
+            \`;
             
             menu.style.left = event.pageX + 'px';
             menu.style.top = event.pageY + 'px';
