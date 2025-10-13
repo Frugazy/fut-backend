@@ -189,6 +189,55 @@ function getSheetData(sheetName, numHeaders = 1) {
   }
 }
 
+// Read header row (first row) for a sheet, capped by MAX_COLS
+function getSheetHeaders(sheetName) {
+  try {
+    const sheet = getSpreadsheet().getSheetByName(sheetName);
+    if (!sheet) return [];
+    const maxCols = MAX_COLS[sheetName] || 20;
+    const lastCol = Math.min(sheet.getLastColumn(), maxCols);
+    if (lastCol < 1) return [];
+    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0] || [];
+    return headers.map(h => (h === null || h === undefined) ? '' : String(h).trim());
+  } catch (e) {
+    Logger.log(`Error reading headers for ${sheetName}: ${e.toString()}`);
+    return [];
+  }
+}
+
+function normalizeHeaderKey(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function buildHeaderIndexMap(headers) {
+  const map = {};
+  for (let i = 0; i < headers.length; i++) {
+    const key = normalizeHeaderKey(headers[i]);
+    if (key && map[key] === undefined) map[key] = i;
+  }
+  return map;
+}
+
+function resolveIndex(map, candidates, fallbackIndex) {
+  for (let i = 0; i < candidates.length; i++) {
+    const key = normalizeHeaderKey(candidates[i]);
+    if (map[key] !== undefined) return map[key];
+  }
+  return fallbackIndex;
+}
+
+// Parse numbers robustly for Chem sheets (e.g., "£1,100", "1 600", "1,600 (Avg)")
+function chemParsePrice(value) {
+  if (typeof value === 'number') return value;
+  if (value === null || value === undefined) return 0;
+  const str = String(value);
+  const match = str.match(/-?\d[\d,\s]*(?:\.\d+)?/);
+  if (!match) return 0;
+  const cleaned = match[0].replace(/[\s,]/g, '');
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? 0 : num;
+}
+
 // ========================================
 // FLUCTUATIONS AREA
 // ========================================
@@ -844,6 +893,11 @@ function buildChemStylesDashboard() {
       return { success: false, message: 'Chem Style Analysis sheet not found' };
     }
     
+    const hunterHeaders = getSheetHeaders(SHEETS.CHEM_MANUAL_HUNTER);
+    const shadowHeaders = getSheetHeaders(SHEETS.CHEM_MANUAL_SHADOW);
+    const hunterIdx = buildHeaderIndexMap(hunterHeaders);
+    const shadowIdx = buildHeaderIndexMap(shadowHeaders);
+
     const hunterData = getSheetData(SHEETS.CHEM_MANUAL_HUNTER, 1);
     const shadowData = getSheetData(SHEETS.CHEM_MANUAL_SHADOW, 1);
     
@@ -871,42 +925,33 @@ function buildChemStylesDashboard() {
     }
 
     // HUNTER
+    const hNameI   = resolveIndex(hunterIdx, ['player name & rating', 'player', 'name'], 0);
+    const hMprI    = resolveIndex(hunterIdx, ['mpr % (calculated)', 'mpr %', 'mpr'], 2);
+    const hBuyI    = resolveIndex(hunterIdx, ['target buying price (max)', 'target buy', 'buy'], 3);
+    const hSellI   = resolveIndex(hunterIdx, ['target selling price (min)', 'target sell', 'sell'], 4);
+    const hNoChemI = resolveIndex(hunterIdx, ['current market price without chem style (est)', 'current price without chem', 'no chem price'], 5);
     for (let i = 0; i < hunterData.length; i++) {
       try {
         const row = hunterData[i];
-        const playerName = (row[0] || '').toString().trim();
+        const playerName = (row[hNameI] || '').toString().trim();
         if (!playerName) continue;
         if (bl.full.has(playerName) || bl.hunter.has(playerName)) continue;
         
-        const mprFromManual = parsePercentCell(row[2]);          // C
-        const targetBuyManual = parsePrice(row[3]);              // D
-        const targetSellManual = parsePrice(row[4]);             // E
-        const currentPriceWithoutChem = parsePrice(row[5]);      // F
-        const observedStyledPrice = parsePrice(row[7] || row[6]); // H or G
+        const mprFromManual = parsePercentCell(row[hMprI]);
+        const targetBuyManual = chemParsePrice(row[hBuyI]);
+        const targetSellManual = chemParsePrice(row[hSellI]);
+        const currentPriceWithoutChem = chemParsePrice(row[hNoChemI]);
 
-        let mprPct = !isNaN(mprFromManual) && mprFromManual > 0 ? mprFromManual : 0; // percent value
-        if ((isNaN(mprFromManual) || mprFromManual <= 0) && observedStyledPrice > 0 && currentPriceWithoutChem > 0) {
-          mprPct = ((observedStyledPrice - currentPriceWithoutChem) / currentPriceWithoutChem) * 100;
-        }
+        // MPR strictly from manual; do not infer from observed prices
+        const mprPct = !isNaN(mprFromManual) && mprFromManual > 0 ? mprFromManual : 0; // percent value
 
-        let targetBuy = 0;
-        if (targetBuyManual > 0) {
-          targetBuy = roundToMarketPrice(targetBuyManual);
-        } else if (observedStyledPrice > 0) {
-          targetBuy = roundDownToMarketPrice(observedStyledPrice * 0.98);
-        }
-
+        // Targets strictly from manual; only compute min-sell if manual sell missing but buy present
+        let targetBuy = targetBuyManual > 0 ? targetBuyManual : 0;
         let targetSell = 0;
         if (targetSellManual > 0) {
-          targetSell = roundToMarketPrice(targetSellManual);
+          targetSell = targetSellManual;
         } else if (targetBuy > 0) {
           targetSell = roundUpToMarketPrice((targetBuy + 1000) / 0.95);
-        }
-
-        // Ensure profitable min sell
-        if (targetBuy > 0) {
-          const minSell = roundUpToMarketPrice((targetBuy + 1000) / 0.95);
-          if (targetSell === 0 || targetSell < minSell) targetSell = minSell;
         }
 
         if (!playerMap[playerName]) {
@@ -943,41 +988,33 @@ function buildChemStylesDashboard() {
     }
 
     // SHADOW
+    const sNameI   = resolveIndex(shadowIdx, ['player name & rating', 'player', 'name'], 0);
+    const sMprI    = resolveIndex(shadowIdx, ['mpr % (calculated)', 'mpr %', 'mpr'], 2);
+    const sBuyI    = resolveIndex(shadowIdx, ['target buying price (max)', 'target buy', 'buy'], 3);
+    const sSellI   = resolveIndex(shadowIdx, ['target selling price (min)', 'target sell', 'sell'], 4);
+    const sNoChemI = resolveIndex(shadowIdx, ['current market price without chem style (est)', 'current price without chem', 'no chem price'], 5);
     for (let i = 0; i < shadowData.length; i++) {
       try {
         const row = shadowData[i];
-        const playerName = (row[0] || '').toString().trim();
+        const playerName = (row[sNameI] || '').toString().trim();
         if (!playerName) continue;
         if (bl.full.has(playerName) || bl.shadow.has(playerName)) continue;
 
-        const mprFromManual = parsePercentCell(row[2]);          // C
-        const targetBuyManual = parsePrice(row[3]);              // D
-        const targetSellManual = parsePrice(row[4]);             // E
-        const currentPriceWithoutChem = parsePrice(row[5]);      // F
-        const observedStyledPrice = parsePrice(row[7] || row[6]); // H or G
+        const mprFromManual = parsePercentCell(row[sMprI]);
+        const targetBuyManual = chemParsePrice(row[sBuyI]);
+        const targetSellManual = chemParsePrice(row[sSellI]);
+        const currentPriceWithoutChem = chemParsePrice(row[sNoChemI]);
 
-        let mprPct = !isNaN(mprFromManual) && mprFromManual > 0 ? mprFromManual : 0;
-        if ((isNaN(mprFromManual) || mprFromManual <= 0) && observedStyledPrice > 0 && currentPriceWithoutChem > 0) {
-          mprPct = ((observedStyledPrice - currentPriceWithoutChem) / currentPriceWithoutChem) * 100;
-        }
+        // MPR strictly from manual
+        const mprPct = !isNaN(mprFromManual) && mprFromManual > 0 ? mprFromManual : 0;
 
-        let targetBuy = 0;
-        if (targetBuyManual > 0) {
-          targetBuy = roundToMarketPrice(targetBuyManual);
-        } else if (observedStyledPrice > 0) {
-          targetBuy = roundDownToMarketPrice(observedStyledPrice * 0.98);
-        }
-
+        // Targets strictly from manual; only compute min-sell if manual sell missing but buy present
+        let targetBuy = targetBuyManual > 0 ? targetBuyManual : 0;
         let targetSell = 0;
         if (targetSellManual > 0) {
-          targetSell = roundToMarketPrice(targetSellManual);
+          targetSell = targetSellManual;
         } else if (targetBuy > 0) {
           targetSell = roundUpToMarketPrice((targetBuy + 1000) / 0.95);
-        }
-
-        if (targetBuy > 0) {
-          const minSell = roundUpToMarketPrice((targetBuy + 1000) / 0.95);
-          if (targetSell === 0 || targetSell < minSell) targetSell = minSell;
         }
 
         if (!playerMap[playerName]) {
